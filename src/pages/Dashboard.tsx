@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Dropzone } from "@/components/studio/Dropzone";
 import { PipelineControls } from "@/components/studio/PipelineControls";
+import { RepoPanel } from "@/components/studio/RepoPanel";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -145,6 +146,8 @@ export default function Dashboard() {
 
           {/* Right — ingestion + slots + gallery */}
           <div className="flex flex-col gap-10">
+            {/* Repository & CI status */}
+            <RepoPanel />
             {/* Asset slots */}
             <section>
               <div className="flex items-center justify-between">
