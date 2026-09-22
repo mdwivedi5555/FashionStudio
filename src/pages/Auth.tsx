@@ -116,23 +116,24 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
       {/* Auth Content */}
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center justify-center h-full flex-col">
-        <Card className="min-w-[350px] pb-0 border shadow-md">
+        <Card className="min-w-[350px] rounded-none border shadow-none">
           {step === "signIn" ? (
             <>
               <CardHeader className="text-center">
               <div className="flex justify-center">
                     <img
                       src={logo}
-                      alt="Lock Icon"
-                      width={64}
-                      height={64}
-                      className="rounded-lg mb-4 mt-4 cursor-pointer"
+                      alt="Luxemee"
+                      width={56}
+                      height={56}
+                      className="mb-4 mt-4 cursor-pointer"
                       onClick={() => navigate("/")}
                     />
                   </div>
-                <CardTitle className="text-xl">Get Started</CardTitle>
+                <p className="studio-eyebrow">LUXEMEE — AI FASHION STUDIO</p>
+                <CardTitle className="studio-serif mt-1 text-2xl font-normal">Enter the studio</CardTitle>
                 <CardDescription>
-                  Enter your email to log in or sign up
+                  Your email is the only key. We&apos;ll send a code.
                 </CardDescription>
               </CardHeader>
               <form onSubmit={handleEmailSubmit}>
@@ -277,13 +278,13 @@ function Auth({ redirectAfterAuth }: AuthProps = {}) {
             </>
           )}
 
-          <div className="py-4 px-6 text-xs text-center text-muted-foreground bg-muted border-t rounded-b-lg">
+          <div className="py-4 px-6 text-xs text-center text-muted-foreground bg-studio-sand border-t rounded-b-none">
             Secured by{" "}
             <a
               href="https://freebuff.com"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-primary transition-colors"
+              className="underline underline-offset-4 hover:text-foreground transition-colors"
             >
               freebuff.com
             </a>
