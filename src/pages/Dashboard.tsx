@@ -106,6 +106,9 @@ export default function Dashboard() {
               <span className="border-b border-foreground pb-0.5 text-foreground">Studio</span>
               <Link to="/bulk" className="transition-colors hover:text-foreground">Bulk</Link>
               <Link to="/billing" className="transition-colors hover:text-foreground">Billing</Link>
+              {user?.role === "admin" && (
+                <Link to="/admin" className="transition-colors hover:text-foreground">Admin</Link>
+              )}
             </nav>
           </div>
           <div className="flex items-center gap-3">

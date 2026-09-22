@@ -59,6 +59,16 @@ export const bootstrapAccount = mutation({
       reason: "Welcome credits",
       createdAt: Date.now(),
     });
+    // Owner bootstrap: promote to admin when the account email is listed in
+    // the ADMIN_EMAILS secret (comma-separated). Set it in the Keys tab.
+    const adminEmails = (process.env.ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
+    const user = await ctx.db.get(userId);
+    if (user?.email && adminEmails.includes(user.email.toLowerCase())) {
+      await ctx.db.patch(userId, { role: "admin" as const });
+    }
     return id;
   },
 });
