@@ -30,15 +30,21 @@ const schema = defineSchema(
       isAnonymous: v.optional(v.boolean()), // is the user anonymous. do not remove
 
       role: v.optional(roleValidator), // role of the user. do not remove
+
+      // Multi-tenant: which tenant's workspace the user is currently in.
+      activeTenantId: v.optional(v.id("tenants")),
     }).index("email", ["email"]), // index for the email. do not remove or modify
 
     // ------------------------------------------------------------------
-    // LUXEMEE STUDIO — Phase 1 domain tables
+    // LUXEMEE STUDIO — Tenants (organizations / brands / agencies)
     // ------------------------------------------------------------------
 
-    // One billing account per user: credits + plan tier.
-    accounts: defineTable({
-      userId: v.id("users"),
+    // A tenant owns its credits, plan, and all studio content.
+    tenants: defineTable({
+      name: v.string(),
+      slug: v.string(),
+      // "personal" tenants are auto-created per user; org tenants by admins.
+      kind: v.union(v.literal("personal"), v.literal("organization")),
       credits: v.number(),
       plan: v.union(
         v.literal("free"),
@@ -46,12 +52,32 @@ const schema = defineSchema(
         v.literal("enterprise"),
       ),
       enterprise: v.boolean(),
+      billingEmail: v.optional(v.string()),
+      createdBy: v.optional(v.id("users")),
       createdAt: v.number(),
-    }).index("by_user", ["userId"]),
+    })
+      .index("by_slug", ["slug"])
+      .index("by_created", ["createdAt"]),
+
+    // Membership: a user can belong to multiple tenants (org membership is
+    // granted by an admin); personal tenants have exactly one owner.
+    tenantMembers: defineTable({
+      tenantId: v.id("tenants"),
+      userId: v.id("users"),
+      role: v.union(v.literal("owner"), v.literal("member")),
+      createdAt: v.number(),
+    })
+      .index("by_user", ["userId"])
+      .index("by_tenant", ["tenantId"]),
+
+    // ------------------------------------------------------------------
+    // LUXEMEE STUDIO — Phase 1 domain tables (tenant-scoped)
+    // ------------------------------------------------------------------
 
     // Ingested source assets: flat-lays, mannequins, model faces, 3D renders.
     assets: defineTable({
-      userId: v.id("users"),
+      tenantId: v.id("tenants"),
+      userId: v.id("users"), // who uploaded
       name: v.string(),
       kind: v.union(
         v.literal("flatlay"),
@@ -66,12 +92,13 @@ const schema = defineSchema(
       mediaType: v.optional(v.string()),
       createdAt: v.number(),
     })
-      .index("by_user", ["userId"])
-      .index("by_user_created", ["userId", "createdAt"]),
+      .index("by_tenant_created", ["tenantId", "createdAt"])
+      .index("by_user", ["userId"]),
 
     // Async generation queue (bulk + single).
     jobs: defineTable({
-      userId: v.id("users"),
+      tenantId: v.id("tenants"),
+      userId: v.id("users"), // who queued it
       batchId: v.optional(v.id("batches")),
       sku: v.optional(v.string()),
       garmentUrl: v.string(),
@@ -110,12 +137,13 @@ const schema = defineSchema(
       startedAt: v.optional(v.number()),
       completedAt: v.optional(v.number()),
     })
-      .index("by_user_created", ["userId", "createdAt"])
+      .index("by_tenant_created", ["tenantId", "createdAt"])
       .index("by_status", ["status", "createdAt"]) // FIFO worker claim
       .index("by_batch", ["batchId"]),
 
     // Bulk CSV import runs.
     batches: defineTable({
+      tenantId: v.id("tenants"),
       userId: v.id("users"),
       name: v.string(),
       engine: v.union(v.literal("catalog"), v.literal("campaign")),
@@ -129,21 +157,23 @@ const schema = defineSchema(
         v.literal("done"),
       ),
       createdAt: v.number(),
-    }).index("by_user_created", ["userId", "createdAt"]),
+    }).index("by_tenant_created", ["tenantId", "createdAt"]),
 
-    // Credit ledger — every deduction and top-up is traceable.
+    // Credit ledger — every deduction and top-up is traceable, per tenant.
     creditLedger: defineTable({
-      userId: v.id("users"),
+      tenantId: v.id("tenants"),
+      userId: v.id("users"), // who performed the action
       delta: v.number(), // negative = spend, positive = top-up/refund
       reason: v.string(),
       jobId: v.optional(v.id("jobs")),
       batchId: v.optional(v.id("batches")),
       createdAt: v.number(),
-    }).index("by_user_created", ["userId", "createdAt"]),
+    }).index("by_tenant_created", ["tenantId", "createdAt"]),
 
-    // Enterprise net-30 invoicing portal.
+    // Enterprise net-30 invoicing portal — issued against a tenant.
     invoices: defineTable({
-      userId: v.id("users"),
+      tenantId: v.id("tenants"),
+      userId: v.id("users"), // who issued it
       number: v.string(),
       periodLabel: v.string(),
       generationCount: v.number(),
@@ -154,8 +184,8 @@ const schema = defineSchema(
       settledVia: v.optional(v.string()),
       createdAt: v.number(),
     })
-      .index("by_user_created", ["userId", "createdAt"])
-      .index("by_user_status", ["userId", "status"]),
+      .index("by_tenant_created", ["tenantId", "createdAt"])
+      .index("by_tenant_status", ["tenantId", "status"]),
   },
   {
     schemaValidation: false,

@@ -4,6 +4,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dropzone } from "@/components/studio/Dropzone";
 import { PipelineControls } from "@/components/studio/PipelineControls";
 import { RepoPanel } from "@/components/studio/RepoPanel";
+import { WorkspaceSwitcher } from "@/components/studio/WorkspaceSwitcher";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -112,6 +113,7 @@ export default function Dashboard() {
             </nav>
           </div>
           <div className="flex items-center gap-3">
+            <WorkspaceSwitcher />
             <Badge variant="outline" className="rounded-none border-border font-normal">
               <Sparkles className="mr-1 size-3" />
               {account ? `${account.credits} credits` : "…"}

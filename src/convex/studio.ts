@@ -9,6 +9,7 @@ import {
 } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { requireTenant, resolveTenantRead } from "./tenants";
 import {
   aestheticValidator,
   CREDIT_COST,
@@ -18,63 +19,57 @@ import {
 } from "./engineConfig";
 
 // ---------------------------------------------------------------------------
-// Accounts & credits
+// Tenant & account
 // ---------------------------------------------------------------------------
 
+/** Legacy-compatible read of the current tenant (replaces getAccount). */
 export const getAccount = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (acct) return acct;
-    return null;
+    const user = await ctx.db.get(userId);
+    if (!user?.activeTenantId) return null;
+    const t = await ctx.db.get(user.activeTenantId);
+    if (!t) return null;
+    return {
+      _id: t._id,
+      credits: t.credits,
+      plan: t.plan,
+      enterprise: t.enterprise,
+    };
   },
 });
 
-/** Create the free-tier account with welcome credits on first visit. */
+/**
+ * Bootstrap: ensure a personal tenant exists for the caller.
+ * Promotes the user to platform admin when their email is in ADMIN_EMAILS.
+ */
 export const bootstrapAccount = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (acct) return acct._id;
-    const id = await ctx.db.insert("accounts", {
-      userId,
-      credits: 25,
-      plan: "free",
-      enterprise: false,
-      createdAt: Date.now(),
-    });
-    await ctx.db.insert("creditLedger", {
-      userId,
-      delta: 25,
-      reason: "Welcome credits",
-      createdAt: Date.now(),
-    });
-    // Owner bootstrap: promote to admin when the account email is listed in
-    // the ADMIN_EMAILS secret (comma-separated). Set it in the Keys tab.
+    const { tenant } = await requireTenant(ctx);
+
+    // Owner bootstrap — owner emails listed in the ADMIN_EMAILS key get the
+    // platform admin role (comma-separated).
     const adminEmails = (process.env.ADMIN_EMAILS ?? "")
       .split(",")
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
-    const user = await ctx.db.get(userId);
-    if (user?.email && adminEmails.includes(user.email.toLowerCase())) {
-      await ctx.db.patch(userId, { role: "admin" as const });
+    const userId = await getAuthUserId(ctx);
+    const user = userId ? await ctx.db.get(userId) : null;
+    if (userId && user?.email && adminEmails.includes(user.email.toLowerCase())) {
+      if (user.role !== "admin") {
+        await ctx.db.patch(userId, { role: "admin" as const });
+      }
     }
-    return id;
+
+    return tenant._id;
   },
 });
 
 // ---------------------------------------------------------------------------
-// Assets — direct-to-storage ingestion registry
+// Assets — direct-to-storage ingestion registry (tenant library)
 // ---------------------------------------------------------------------------
 
 /** Direct client-to-storage upload: no server-side payload proxying. */
@@ -90,17 +85,20 @@ export const generateUploadUrl = mutation({
 export const listAssets = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    const resolved = await resolveTenantRead(ctx);
+    if (!resolved) return [];
+    const { tenant } = resolved;
     const assets = await ctx.db
       .query("assets")
-      .withIndex("by_user_created", (q) => q.eq("userId", userId))
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenant._id))
       .order("desc")
       .take(120);
     return Promise.all(
       assets.map(async (a) => ({
         ...a,
-        url: a.storageId ? ((await ctx.storage.getUrl(a.storageId)) ?? a.url ?? null) : (a.url ?? null),
+        url: a.storageId
+          ? ((await ctx.storage.getUrl(a.storageId)) ?? a.url ?? null)
+          : (a.url ?? null),
       })),
     );
   },
@@ -116,9 +114,9 @@ export const registerAsset = mutation({
     mediaType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const { tenant, userId } = await requireTenant(ctx);
     const id = await ctx.db.insert("assets", {
+      tenantId: tenant._id,
       userId,
       name: args.name,
       kind: args.kind,
@@ -133,17 +131,18 @@ export const registerAsset = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// Jobs — single generation requests
+// Jobs — single generation requests (tenant queue, tenant credit pool)
 // ---------------------------------------------------------------------------
 
 export const listJobs = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    const resolved = await resolveTenantRead(ctx);
+    if (!resolved) return [];
+    const { tenant } = resolved;
     return ctx.db
       .query("jobs")
-      .withIndex("by_user_created", (q) => q.eq("userId", userId))
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenant._id))
       .order("desc")
       .take(60);
   },
@@ -164,19 +163,13 @@ export const createJob = mutation({
     sku: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (!acct) throw new Error("Account not found");
-    if (acct.credits < CREDIT_COST) {
+    const { tenant, userId } = await requireTenant(ctx);
+    if (tenant.credits < CREDIT_COST) {
       throw new Error("Insufficient credits — top up in Billing.");
     }
 
     const jobId = await ctx.db.insert("jobs", {
+      tenantId: tenant._id,
       userId,
       sku: args.sku,
       garmentUrl: args.garmentUrl,
@@ -190,9 +183,10 @@ export const createJob = mutation({
       createdAt: Date.now(),
     });
 
-    // Reserve credits immediately; refunded on failure.
-    await ctx.db.patch(acct._id, { credits: acct.credits - CREDIT_COST });
+    // Reserve credits from the tenant pool; refunded on failure.
+    await ctx.db.patch(tenant._id, { credits: tenant.credits - CREDIT_COST });
     await ctx.db.insert("creditLedger", {
+      tenantId: tenant._id,
       userId,
       delta: -CREDIT_COST,
       reason: "Generation queued",
@@ -216,20 +210,20 @@ export const getFileUrl = query({
 });
 
 // ---------------------------------------------------------------------------
-// Worker — FIFO claim, completion, failure refunds
+// Worker — FIFO claim, completion, failure refunds (tenant-aware)
 // ---------------------------------------------------------------------------
 
 export const claimNextJobs = internalMutation({
   args: { limit: v.number() },
   handler: async (ctx, { limit }) => {
-    const queued = await ctx.db
+    const jobs = await ctx.db
       .query("jobs")
       .withIndex("by_status", (q) => q.eq("status", "queued"))
       .order("asc")
       .take(limit);
     const claimed: Id<"jobs">[] = [];
     const now = Date.now();
-    for (const job of queued) {
+    for (const job of jobs) {
       await ctx.db.patch(job._id, {
         status: "processing" as const,
         startedAt: now,
@@ -269,14 +263,14 @@ export const failJob = internalMutation({
       error,
       completedAt: Date.now(),
     });
-    // Refund reserved credits on failure.
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", job.userId))
-      .unique();
-    if (acct) {
-      await ctx.db.patch(acct._id, { credits: acct.credits + job.costCredits });
+    // Refund reserved credits back to the tenant pool.
+    const tenant = await ctx.db.get(job.tenantId);
+    if (tenant) {
+      await ctx.db.patch(tenant._id, {
+        credits: tenant.credits + job.costCredits,
+      });
       await ctx.db.insert("creditLedger", {
+        tenantId: job.tenantId,
         userId: job.userId,
         delta: job.costCredits,
         reason: "Refund — generation failed",
@@ -319,7 +313,8 @@ export const runWorker = internalAction({
       const job = await ctx.runQuery(internal.studio.getJobInternal, { jobId });
       if (!job || job.status !== "processing") continue;
       try {
-        const result = await generateWithFallback(ctx, job);
+        const { callGenerationEngine } = await import("./generation");
+        const result = await callGenerationEngine(ctx, job);
         await ctx.runMutation(internal.studio.completeJob, {
           jobId,
           resultUrl: result.url,
@@ -354,7 +349,7 @@ export const kickWorker = mutation({
 });
 
 // ---------------------------------------------------------------------------
-// Enterprise invoicing — net-30 corporate settlement
+// Enterprise invoicing — net-30 corporate settlement (issued against tenant)
 // ---------------------------------------------------------------------------
 
 export const issueInvoice = mutation({
@@ -364,19 +359,14 @@ export const issueInvoice = mutation({
     amountCents: v.number(),
   },
   handler: async (ctx, { periodLabel, generationCount, amountCents }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (!acct) throw new Error("Account not found");
-    if (!acct.enterprise) {
+    const { tenant, userId } = await requireTenant(ctx);
+    if (!tenant.enterprise) {
       throw new Error("Enterprise invoicing requires a wholesale account.");
     }
     const number = `LXM-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const dueAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // net-30
     const id = await ctx.db.insert("invoices", {
+      tenantId: tenant._id,
       userId,
       number,
       periodLabel,
@@ -389,15 +379,3 @@ export const issueInvoice = mutation({
     return id;
   },
 });
-
-// ---------------------------------------------------------------------------
-// Generation pipeline — primary engines with CatVTON-style circuit breaker
-// ---------------------------------------------------------------------------
-
-async function generateWithFallback(
-  ctx: any,
-  job: any,
-): Promise<{ url: string; engineUsed: "catalog" | "campaign" | "fallback" }> {
-  const { callGenerationEngine } = await import("./generation");
-  return callGenerationEngine(ctx, job);
-}

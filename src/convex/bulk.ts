@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { requireTenant, resolveTenantRead } from "./tenants";
 import {
   aestheticValidator,
   CREDIT_COST,
@@ -8,17 +9,18 @@ import {
 } from "./engineConfig";
 
 // ---------------------------------------------------------------------------
-// Bulk processing — CSV batches (MSME-scale asynchronous pipeline)
+// Bulk processing — CSV batches (tenant-scoped asynchronous pipeline)
 // ---------------------------------------------------------------------------
 
 export const listBatches = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    const resolved = await resolveTenantRead(ctx);
+    if (!resolved) return [];
+    const { tenant } = resolved;
     return ctx.db
       .query("batches")
-      .withIndex("by_user_created", (q) => q.eq("userId", userId))
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenant._id))
       .order("desc")
       .take(30);
   },
@@ -38,25 +40,20 @@ export const createBatch = mutation({
     ),
   },
   handler: async (ctx, { name, engine, aesthetic, rows }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const { tenant, userId } = await requireTenant(ctx);
 
     if (rows.length === 0) throw new Error("CSV produced no usable rows");
     if (rows.length > 500) throw new Error("Batch limit is 500 rows per CSV run.");
 
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (!acct) throw new Error("Account not found");
     const needed = rows.length * CREDIT_COST;
-    if (acct.credits < needed) {
+    if (tenant.credits < needed) {
       throw new Error(
-        `Batch needs ${needed} credits — account holds ${acct.credits}. Top up in Billing.`,
+        `Batch needs ${needed} credits — workspace holds ${tenant.credits}. Top up in Billing.`,
       );
     }
 
     const batchId = await ctx.db.insert("batches", {
+      tenantId: tenant._id,
       userId,
       name,
       engine,
@@ -70,6 +67,7 @@ export const createBatch = mutation({
 
     for (const row of rows) {
       const jobId = await ctx.db.insert("jobs", {
+        tenantId: tenant._id,
         userId,
         batchId,
         sku: row.sku,
@@ -83,6 +81,7 @@ export const createBatch = mutation({
         createdAt: Date.now(),
       });
       await ctx.db.insert("creditLedger", {
+        tenantId: tenant._id,
         userId,
         delta: -CREDIT_COST,
         reason: `Batch ${name} — SKU ${row.sku}`,
@@ -92,7 +91,7 @@ export const createBatch = mutation({
       });
     }
 
-    await ctx.db.patch(acct._id, { credits: acct.credits - needed });
+    await ctx.db.patch(tenant._id, { credits: tenant.credits - needed });
 
     return { batchId, queued: rows.length };
   },
@@ -113,7 +112,7 @@ export const getBatchInternal = internalQuery({
 });
 
 // ---------------------------------------------------------------------------
-// Billing — credit packs and enterprise invoicing
+// Billing — tenant credit packs and enterprise invoicing
 // ---------------------------------------------------------------------------
 
 export const CREDIT_PACKS = {
@@ -125,37 +124,32 @@ export const CREDIT_PACKS = {
 export const topUpCredits = mutation({
   args: { packId: v.string() },
   handler: async (ctx, { packId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const { tenant, userId } = await requireTenant(ctx);
 
     const pack = CREDIT_PACKS[packId as keyof typeof CREDIT_PACKS];
     if (!pack) throw new Error("Unknown credit pack");
 
-    const acct = await ctx.db
-      .query("accounts")
-      .withIndex("by_user", (q) => q.eq("userId", userId))
-      .unique();
-    if (!acct) throw new Error("Account not found");
-
-    await ctx.db.patch(acct._id, { credits: acct.credits + pack.credits });
+    await ctx.db.patch(tenant._id, { credits: tenant.credits + pack.credits });
     await ctx.db.insert("creditLedger", {
+      tenantId: tenant._id,
       userId,
       delta: pack.credits,
       reason: `Purchased ${pack.label}`,
       createdAt: Date.now(),
     });
-    return { credits: acct.credits + pack.credits };
+    return { credits: tenant.credits + pack.credits };
   },
 });
 
 export const listLedger = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    const resolved = await resolveTenantRead(ctx);
+    if (!resolved) return [];
+    const { tenant } = resolved;
     return ctx.db
       .query("creditLedger")
-      .withIndex("by_user_created", (q) => q.eq("userId", userId))
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenant._id))
       .order("desc")
       .take(50);
   },
@@ -164,11 +158,12 @@ export const listLedger = query({
 export const listInvoices = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    const resolved = await resolveTenantRead(ctx);
+    if (!resolved) return [];
+    const { tenant } = resolved;
     return ctx.db
       .query("invoices")
-      .withIndex("by_user_created", (q) => q.eq("userId", userId))
+      .withIndex("by_tenant_created", (q) => q.eq("tenantId", tenant._id))
       .order("desc")
       .take(50);
   },
@@ -177,11 +172,10 @@ export const listInvoices = query({
 export const settleInvoice = mutation({
   args: { invoiceId: v.id("invoices"), settledVia: v.string() },
   handler: async (ctx, { invoiceId, settledVia }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const { tenant } = await requireTenant(ctx);
     const inv = await ctx.db.get(invoiceId);
     if (!inv) throw new Error("Invoice not found");
-    if (inv.userId !== userId) throw new Error("Not your invoice");
+    if (inv.tenantId !== tenant._id) throw new Error("Not your invoice");
     await ctx.db.patch(invoiceId, {
       status: "paid" as const,
       paidAt: Date.now(),

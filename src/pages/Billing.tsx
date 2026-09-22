@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { WorkspaceSwitcher } from "@/components/studio/WorkspaceSwitcher";
 import { api } from "@/convex/_generated/api";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "convex/react";
@@ -101,6 +102,7 @@ export default function Billing() {
             </Link>
           </div>
           <div className="flex items-center gap-3">
+            <WorkspaceSwitcher />
             <Badge variant="outline" className="rounded-none border-border font-normal">
               <Sparkles className="mr-1 size-3" />
               {account ? `${account.credits} credits` : "…"}
