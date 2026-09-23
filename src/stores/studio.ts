@@ -31,8 +31,8 @@ interface StudioState {
   setStylePrompt: (s: string) => void;
   togglePromptPulse: () => void;
   applyPreset: (id: string) => void;
-  selectGarment: (a: StudioAsset) => void;
-  selectModel: (a: StudioAsset) => void;
+  selectGarment: (a: StudioAsset | null) => void;
+  selectModel: (a: StudioAsset | null) => void;
   reset: () => void;
 }
 

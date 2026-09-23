@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Dropzone } from "@/components/studio/Dropzone";
+import { CanvasSlot } from "@/components/studio/CanvasSlot";
 import { PipelineControls } from "@/components/studio/PipelineControls";
 import { RepoPanel } from "@/components/studio/RepoPanel";
 import { WorkspaceSwitcher } from "@/components/studio/WorkspaceSwitcher";
@@ -158,34 +159,24 @@ export default function Dashboard() {
               <div className="flex items-center justify-between">
                 <p className="studio-eyebrow">Canvas Slots</p>
                 <span className="text-[11px] text-muted-foreground">
-                  Click a library tile to assign
+                  Click a slot to choose from library
                 </span>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {(
                   [
-                    { key: "garment", label: "Garment", asset: selectedGarment, pool: garmentPool, icon: Shirt },
-                    { key: "model", label: "Model Ref", asset: selectedModel, pool: modelPool, icon: Scan },
+                    { key: "garment", label: "Garment", asset: selectedGarment, pool: garmentPool, icon: Shirt, onSelect: selectGarment },
+                    { key: "model", label: "Model Ref", asset: selectedModel, pool: modelPool, icon: Scan, onSelect: selectModel },
                   ] as const
                 ).map((slot) => (
-                  <div key={slot.key} className="studio-frame flex items-center gap-4 p-3">
-                    <div className="relative flex size-20 shrink-0 items-center justify-center overflow-hidden border border-border bg-studio-canvas">
-                      {slot.asset?.url ? (
-                        <img src={slot.asset.url} alt={slot.asset.name} className="h-full w-full object-cover" />
-                      ) : (
-                        <slot.icon className="size-6 text-muted-foreground/50" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="studio-eyebrow">{slot.label}</p>
-                      <p className="truncate text-sm">
-                        {slot.asset ? slot.asset.name : "Empty slot"}
-                      </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {slot.pool.length} candidate{slot.pool.length === 1 ? "" : "s"} in library
-                      </p>
-                    </div>
-                  </div>
+                  <CanvasSlot
+                    key={slot.key}
+                    label={slot.label}
+                    asset={slot.asset}
+                    pool={slot.pool}
+                    icon={slot.icon}
+                    onSelect={slot.onSelect}
+                  />
                 ))}
               </div>
             </section>
