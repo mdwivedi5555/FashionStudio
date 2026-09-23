@@ -63,12 +63,11 @@ export default function Dashboard() {
     promptPulseOn,
   } = useStudioStore();
 
-  // Self-heal: ensure the free account exists on first dashboard visit.
+  // Self-heal on every dashboard load: ensures the personal tenant exists
+  // and promotes ADMIN_EMAILS owners to platform admin (idempotent).
   useEffect(() => {
-    if (account === null) {
-      bootstrap({}).catch(() => undefined);
-    }
-  }, [account, bootstrap]);
+    bootstrap({}).catch(() => undefined);
+  }, [bootstrap]);
 
   const library: StudioAsset[] = useMemo(
     () =>
